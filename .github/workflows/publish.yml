@@ -1,0 +1,98 @@
+name: Publish esoul to PyPI
+
+# Fires on any tag of the form `v1.2.3`. Pushing a non-version tag (or
+# a branch) is a no-op. CI builds the package, validates metadata, and
+# uploads to PyPI via OIDC — no API tokens stored anywhere.
+#
+# To cut a release:
+#   1. Bump `src/esoul/_version.py` and add a CHANGELOG entry.
+#   2. Commit + push to `main`.
+#   3. `git tag -a v0.1.0 -m "esoul 0.1.0" && git push origin v0.1.0`
+#   4. Watch the Actions tab.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  # Allow manual re-runs from the Actions tab (e.g. retry after a
+  # transient PyPI 5xx). The build is fully deterministic from
+  # _version.py + the source tree at that commit.
+  workflow_dispatch:
+
+# Cancel any prior run for the same ref — prevents two concurrent
+# uploads racing on the same version.
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build sdist + wheel
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install build tools
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install build twine
+
+      - name: Verify tag matches package version
+        # Refuse to publish if the git tag and src/esoul/_version.py
+        # disagree — prevents the "tag v0.1.1 but forgot to bump the
+        # source" footgun.
+        run: |
+          TAG_VERSION="${GITHUB_REF#refs/tags/v}"
+          PKG_VERSION=$(grep -oP '__version__\s*=\s*"\K[^"]+' src/esoul/_version.py)
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "::error::Tag version ($TAG_VERSION) does not match _version.py ($PKG_VERSION)"
+            exit 1
+          fi
+          echo "Building esoul $PKG_VERSION"
+
+      - name: Build
+        run: python -m build
+
+      - name: Validate metadata
+        run: twine check dist/*
+
+      - name: Upload artifacts for the publish job
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-package-distributions
+          path: dist/
+
+  publish:
+    name: Publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+
+    # If you set Environment name = pypi in the PyPI form, uncomment:
+    # environment:
+    #   name: pypi
+    #   url: https://pypi.org/project/esoul/
+
+    permissions:
+      # MANDATORY for Trusted Publishing — lets the workflow mint an
+      # OIDC token that PyPI exchanges for a short-lived upload token.
+      # Without this permission the publish step fails with 403.
+      id-token: write
+
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: python-package-distributions
+          path: dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        # No `password:` — auth happens via OIDC + the Trusted
+        # Publisher you registered on PyPI for this repo + workflow.
