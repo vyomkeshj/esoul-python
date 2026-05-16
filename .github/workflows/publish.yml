@@ -45,9 +45,10 @@ jobs:
           python -m pip install build twine
 
       - name: Verify tag matches package version
-        # Refuse to publish if the git tag and src/esoul/_version.py
-        # disagree — prevents the "tag v0.1.1 but forgot to bump the
-        # source" footgun.
+        # Only runs when triggered by a `refs/tags/v*` push — for
+        # workflow_dispatch runs from a branch (no tag exists yet)
+        # we just build + validate as a dry-run.
+        if: github.ref_type == 'tag'
         run: |
           TAG_VERSION="${GITHUB_REF#refs/tags/v}"
           PKG_VERSION=$(grep -oP '__version__\s*=\s*"\K[^"]+' src/esoul/_version.py)
@@ -55,7 +56,13 @@ jobs:
             echo "::error::Tag version ($TAG_VERSION) does not match _version.py ($PKG_VERSION)"
             exit 1
           fi
-          echo "Building esoul $PKG_VERSION"
+          echo "Building esoul $PKG_VERSION (release tag)"
+
+      - name: Note dry-run mode (non-tag trigger)
+        if: github.ref_type != 'tag'
+        run: |
+          PKG_VERSION=$(grep -oP '__version__\s*=\s*"\K[^"]+' src/esoul/_version.py)
+          echo "::notice::Build-only run (no tag). Publishing skipped. Package version: $PKG_VERSION"
 
       - name: Build
         run: python -m build
@@ -73,6 +80,10 @@ jobs:
     name: Publish to PyPI
     needs: build
     runs-on: ubuntu-latest
+
+    # Publish ONLY runs on tag pushes — manual workflow_dispatch from a
+    # branch is a build-and-validate dry-run, never an upload.
+    if: github.ref_type == 'tag' && startsWith(github.ref, 'refs/tags/v')
 
     # If you set Environment name = pypi in the PyPI form, uncomment:
     # environment:
