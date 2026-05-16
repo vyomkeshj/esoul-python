@@ -239,34 +239,37 @@ class AgentsResource:
 
     def invoke(
         self,
-        workspace_id: str,
         agent: str,
         *,
         input: InputType,
+        workspace_id: Optional[str] = None,
         images: Optional[Sequence[str]] = None,
         idempotency_key: Optional[str] = None,
     ) -> InvocationHandle:
         """Invoke any agent_builder app in the workspace.
 
         Args:
-            workspace_id: A workspace in session.workspace_ids.
             agent: nodeId (uuid) OR instanceName (case-insensitive).
                 Ambiguous instanceName → APIError(409, agent_ambiguous)
                 with `details.matchingNodeIds` for disambiguation.
             input: Plain text or HandoffEntry[] for multimodal.
+            workspace_id: A workspace in session.workspace_ids. When
+                omitted, defaults to the session's only workspace (or
+                raises if the session has multiple).
             images: Optional workspace fileIds / paths to attach as
                 multimodal content for the first agent.
             idempotency_key: Auto-generated UUID v4 if omitted. Retries
                 with the same key produce the same invocationId (server
                 seeds the deterministic uuidv5 derivation off it).
         """
+        ws = self._transport.resolve_workspace_id(workspace_id)
         idem = idempotency_key or str(uuid.uuid4())
         body: Dict[str, Any] = {"input": input}
         if images:
             body["images"] = list(images)
         r = self._transport.request(
             "POST",
-            f"/api/v1/workspaces/{workspace_id}/agents/{agent}/invoke",
+            f"/api/v1/workspaces/{ws}/agents/{agent}/invoke",
             json_body=body,
             idempotency_key=idem,
         )
@@ -404,20 +407,21 @@ class AsyncAgentsResource:
 
     async def invoke(
         self,
-        workspace_id: str,
         agent: str,
         *,
         input: InputType,
+        workspace_id: Optional[str] = None,
         images: Optional[Sequence[str]] = None,
         idempotency_key: Optional[str] = None,
     ) -> AsyncInvocationHandle:
+        ws = await self._transport.resolve_workspace_id(workspace_id)
         idem = idempotency_key or str(uuid.uuid4())
         body: Dict[str, Any] = {"input": input}
         if images:
             body["images"] = list(images)
         r = await self._transport.request(
             "POST",
-            f"/api/v1/workspaces/{workspace_id}/agents/{agent}/invoke",
+            f"/api/v1/workspaces/{ws}/agents/{agent}/invoke",
             json_body=body,
             idempotency_key=idem,
         )

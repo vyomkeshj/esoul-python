@@ -5,4 +5,4 @@ is the only step required to cut a release (combined with a `CHANGELOG.md`
 entry + git tag).
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"

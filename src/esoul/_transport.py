@@ -299,6 +299,10 @@ class SyncTransport:
             http2=False,  # http/2 multiplexing pairs poorly with single-call retries
         )
         self._refresh_lock = threading.Lock()
+        # Cached session workspace ids — populated on first call to
+        # `resolve_workspace_id(None)` via /describe. Avoids one extra
+        # HTTP round-trip per resource call.
+        self._workspace_ids_cache: Optional[list[str]] = None
 
     @property
     def credentials(self) -> Credentials:
@@ -313,6 +317,43 @@ class SyncTransport:
 
     def __exit__(self, *exc_info: object) -> None:
         self.close()
+
+    # ─── Workspace resolution ────────────────────────────────────────────
+
+    def resolve_workspace_id(self, explicit: Optional[str]) -> str:
+        """Return `explicit` when set; otherwise auto-resolve from session.
+
+        Lazily fetches `/api/v1/describe` once per transport lifetime to
+        learn the session's `workspaceIds`. When the session has exactly
+        ONE workspace, it becomes the implicit default. Multiple → raise
+        with the list (caller must disambiguate). Zero → raise (broken
+        session).
+        """
+        if explicit:
+            return explicit
+        ids = self._fetch_workspace_ids()
+        if len(ids) == 1:
+            return ids[0]
+        if len(ids) == 0:
+            from .exceptions import EsoulError
+            raise EsoulError(
+                "Session has no accessible workspaces. Re-create the PAT "
+                "with explicit workspace scope, or pass workspace_id=... ."
+            )
+        from .exceptions import EsoulError
+        raise EsoulError(
+            f"Session has access to {len(ids)} workspaces; pass "
+            f"workspace_id=... explicitly. Available: {ids}"
+        )
+
+    def _fetch_workspace_ids(self) -> list[str]:
+        if self._workspace_ids_cache is not None:
+            return self._workspace_ids_cache
+        resp = self.request("GET", "/api/v1/describe")
+        body = resp.json()
+        ids = list(body.get("session", {}).get("workspaceIds", []) or [])
+        self._workspace_ids_cache = ids
+        return ids
 
     # ─── Public surface ──────────────────────────────────────────────────
 
@@ -498,6 +539,34 @@ class AsyncTransport:
         # synchronously (often outside a running loop), we defer creating
         # the lock until the first request actually awaits it.
         self._refresh_lock: Optional[asyncio.Lock] = None
+        self._workspace_ids_cache: Optional[list[str]] = None
+
+    async def resolve_workspace_id(self, explicit: Optional[str]) -> str:
+        if explicit:
+            return explicit
+        ids = await self._fetch_workspace_ids()
+        if len(ids) == 1:
+            return ids[0]
+        if len(ids) == 0:
+            from .exceptions import EsoulError
+            raise EsoulError(
+                "Session has no accessible workspaces. Re-create the PAT "
+                "with explicit workspace scope, or pass workspace_id=... ."
+            )
+        from .exceptions import EsoulError
+        raise EsoulError(
+            f"Session has access to {len(ids)} workspaces; pass "
+            f"workspace_id=... explicitly. Available: {ids}"
+        )
+
+    async def _fetch_workspace_ids(self) -> list[str]:
+        if self._workspace_ids_cache is not None:
+            return self._workspace_ids_cache
+        resp = await self.request("GET", "/api/v1/describe")
+        body = resp.json()
+        ids = list(body.get("session", {}).get("workspaceIds", []) or [])
+        self._workspace_ids_cache = ids
+        return ids
 
     def _get_refresh_lock(self) -> asyncio.Lock:
         """Construct the asyncio.Lock on demand, inside a running loop.

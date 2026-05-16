@@ -107,9 +107,9 @@ class QuestionsResource:
 
     def ask(
         self,
-        workspace_id: str,
         question: str,
         *,
+        workspace_id: Optional[str] = None,
         image_file_ids: Optional[Sequence[str]] = None,
         timeout: float = 600.0,
         expires_in_seconds: int = 7 * 24 * 3600,
@@ -120,6 +120,9 @@ class QuestionsResource:
         """Synchronous ask + wait. Glues `ask_async` + `wait_for_answer`.
 
         Args:
+            question: Markdown-friendly question text.
+            workspace_id: Where the question lands. Defaults to the
+                session's only workspace.
             timeout: LOCAL wait timeout. The question's server-side TTL is
                 `expires_in_seconds` (default 7d, max 30d). When `timeout`
                 expires before the answer, raises `QuestionTimeout` —
@@ -128,28 +131,31 @@ class QuestionsResource:
                 auto-answers with this text instead of marking the row
                 "expired". `ask()` returns the synthetic answer.
         """
+        ws = self._transport.resolve_workspace_id(workspace_id)
         qid = self.ask_async(
-            workspace_id, question,
+            question,
+            workspace_id=ws,
             image_file_ids=image_file_ids,
             expires_in_seconds=expires_in_seconds,
             default_on_timeout=default_on_timeout,
             idempotency_key=idempotency_key,
         )
         return self.wait_for_answer(
-            workspace_id, qid, timeout=timeout, poll_interval=poll_interval,
+            qid, workspace_id=ws, timeout=timeout, poll_interval=poll_interval,
         )
 
     def ask_async(
         self,
-        workspace_id: str,
         question: str,
         *,
+        workspace_id: Optional[str] = None,
         image_file_ids: Optional[Sequence[str]] = None,
         expires_in_seconds: int = 7 * 24 * 3600,
         default_on_timeout: Optional[str] = None,
         idempotency_key: Optional[str] = None,
     ) -> str:
         """Post a question; return its id without waiting."""
+        ws = self._transport.resolve_workspace_id(workspace_id)
         idem = idempotency_key or str(uuid.uuid4())
         body: Dict[str, Any] = {
             "question": question,
@@ -161,7 +167,7 @@ class QuestionsResource:
             body["defaultOnTimeout"] = default_on_timeout
         r = self._transport.request(
             "POST",
-            f"/api/v1/workspaces/{workspace_id}/questions",
+            f"/api/v1/workspaces/{ws}/questions",
             json_body=body,
             idempotency_key=idem,
         )
@@ -169,16 +175,17 @@ class QuestionsResource:
 
     def wait_for_answer(
         self,
-        workspace_id: str,
         question_id: str,
         *,
+        workspace_id: Optional[str] = None,
         timeout: float = 600.0,
         poll_interval: float = 2.0,
     ) -> Answer:
+        ws = self._transport.resolve_workspace_id(workspace_id)
         deadline = time.monotonic() + timeout
         interval = poll_interval
         while True:
-            q = self.get(workspace_id, question_id)
+            q = self.get(question_id, workspace_id=ws)
             if q.status == "answered":
                 return Answer(
                     question_id=q.question_id,
@@ -201,41 +208,49 @@ class QuestionsResource:
 
     def list(
         self,
-        workspace_id: str,
         *,
+        workspace_id: Optional[str] = None,
         status: Literal["pending", "answered", "expired", "cancelled", "all"] = "pending",
         since: Optional[str] = None,
         limit: int = 50,
     ) -> List[Question]:
+        ws = self._transport.resolve_workspace_id(workspace_id)
         params: Dict[str, Any] = {"status": status, "limit": limit}
         if since:
             params["since"] = since
         r = self._transport.request(
             "GET",
-            f"/api/v1/workspaces/{workspace_id}/questions",
+            f"/api/v1/workspaces/{ws}/questions",
             params=params,
         )
         return [_decode_question(item) for item in r.json().get("questions", [])]
 
-    def get(self, workspace_id: str, question_id: str) -> Question:
+    def get(
+        self,
+        question_id: str,
+        *,
+        workspace_id: Optional[str] = None,
+    ) -> Question:
+        ws = self._transport.resolve_workspace_id(workspace_id)
         r = self._transport.request(
             "GET",
-            f"/api/v1/workspaces/{workspace_id}/questions/{question_id}",
+            f"/api/v1/workspaces/{ws}/questions/{question_id}",
         )
         return _decode_question(r.json())
 
     def answer(
         self,
-        workspace_id: str,
         question_id: str,
         answer: str,
         *,
+        workspace_id: Optional[str] = None,
         idempotency_key: Optional[str] = None,
     ) -> Answer:
+        ws = self._transport.resolve_workspace_id(workspace_id)
         idem = idempotency_key or str(uuid.uuid4())
         r = self._transport.request(
             "POST",
-            f"/api/v1/workspaces/{workspace_id}/questions/{question_id}/answer",
+            f"/api/v1/workspaces/{ws}/questions/{question_id}/answer",
             json_body={"answer": answer},
             idempotency_key=idem,
         )
@@ -249,19 +264,20 @@ class QuestionsResource:
 
     def cancel(
         self,
-        workspace_id: str,
         question_id: str,
         *,
+        workspace_id: Optional[str] = None,
         idempotency_key: Optional[str] = None,
     ) -> Question:
+        ws = self._transport.resolve_workspace_id(workspace_id)
         idem = idempotency_key or str(uuid.uuid4())
         self._transport.request(
             "POST",
-            f"/api/v1/workspaces/{workspace_id}/questions/{question_id}/cancel",
+            f"/api/v1/workspaces/{ws}/questions/{question_id}/cancel",
             json_body={},
             idempotency_key=idem,
         )
-        return self.get(workspace_id, question_id)
+        return self.get(question_id, workspace_id=ws)
 
 
 # ─── Async ───────────────────────────────────────────────────────────────
@@ -273,9 +289,9 @@ class AsyncQuestionsResource:
 
     async def ask(
         self,
-        workspace_id: str,
         question: str,
         *,
+        workspace_id: Optional[str] = None,
         image_file_ids: Optional[Sequence[str]] = None,
         timeout: float = 600.0,
         expires_in_seconds: int = 7 * 24 * 3600,
@@ -283,27 +299,30 @@ class AsyncQuestionsResource:
         poll_interval: float = 2.0,
         idempotency_key: Optional[str] = None,
     ) -> Answer:
+        ws = await self._transport.resolve_workspace_id(workspace_id)
         qid = await self.ask_async(
-            workspace_id, question,
+            question,
+            workspace_id=ws,
             image_file_ids=image_file_ids,
             expires_in_seconds=expires_in_seconds,
             default_on_timeout=default_on_timeout,
             idempotency_key=idempotency_key,
         )
         return await self.wait_for_answer(
-            workspace_id, qid, timeout=timeout, poll_interval=poll_interval,
+            qid, workspace_id=ws, timeout=timeout, poll_interval=poll_interval,
         )
 
     async def ask_async(
         self,
-        workspace_id: str,
         question: str,
         *,
+        workspace_id: Optional[str] = None,
         image_file_ids: Optional[Sequence[str]] = None,
         expires_in_seconds: int = 7 * 24 * 3600,
         default_on_timeout: Optional[str] = None,
         idempotency_key: Optional[str] = None,
     ) -> str:
+        ws = await self._transport.resolve_workspace_id(workspace_id)
         idem = idempotency_key or str(uuid.uuid4())
         body: Dict[str, Any] = {
             "question": question,
@@ -315,7 +334,7 @@ class AsyncQuestionsResource:
             body["defaultOnTimeout"] = default_on_timeout
         r = await self._transport.request(
             "POST",
-            f"/api/v1/workspaces/{workspace_id}/questions",
+            f"/api/v1/workspaces/{ws}/questions",
             json_body=body,
             idempotency_key=idem,
         )
@@ -323,16 +342,17 @@ class AsyncQuestionsResource:
 
     async def wait_for_answer(
         self,
-        workspace_id: str,
         question_id: str,
         *,
+        workspace_id: Optional[str] = None,
         timeout: float = 600.0,
         poll_interval: float = 2.0,
     ) -> Answer:
+        ws = await self._transport.resolve_workspace_id(workspace_id)
         deadline = time.monotonic() + timeout
         interval = poll_interval
         while True:
-            q = await self.get(workspace_id, question_id)
+            q = await self.get(question_id, workspace_id=ws)
             if q.status == "answered":
                 return Answer(
                     question_id=q.question_id,
@@ -355,41 +375,49 @@ class AsyncQuestionsResource:
 
     async def list(
         self,
-        workspace_id: str,
         *,
+        workspace_id: Optional[str] = None,
         status: Literal["pending", "answered", "expired", "cancelled", "all"] = "pending",
         since: Optional[str] = None,
         limit: int = 50,
     ) -> List[Question]:
+        ws = await self._transport.resolve_workspace_id(workspace_id)
         params: Dict[str, Any] = {"status": status, "limit": limit}
         if since:
             params["since"] = since
         r = await self._transport.request(
             "GET",
-            f"/api/v1/workspaces/{workspace_id}/questions",
+            f"/api/v1/workspaces/{ws}/questions",
             params=params,
         )
         return [_decode_question(item) for item in r.json().get("questions", [])]
 
-    async def get(self, workspace_id: str, question_id: str) -> Question:
+    async def get(
+        self,
+        question_id: str,
+        *,
+        workspace_id: Optional[str] = None,
+    ) -> Question:
+        ws = await self._transport.resolve_workspace_id(workspace_id)
         r = await self._transport.request(
             "GET",
-            f"/api/v1/workspaces/{workspace_id}/questions/{question_id}",
+            f"/api/v1/workspaces/{ws}/questions/{question_id}",
         )
         return _decode_question(r.json())
 
     async def answer(
         self,
-        workspace_id: str,
         question_id: str,
         answer: str,
         *,
+        workspace_id: Optional[str] = None,
         idempotency_key: Optional[str] = None,
     ) -> Answer:
+        ws = await self._transport.resolve_workspace_id(workspace_id)
         idem = idempotency_key or str(uuid.uuid4())
         r = await self._transport.request(
             "POST",
-            f"/api/v1/workspaces/{workspace_id}/questions/{question_id}/answer",
+            f"/api/v1/workspaces/{ws}/questions/{question_id}/answer",
             json_body={"answer": answer},
             idempotency_key=idem,
         )
@@ -403,19 +431,20 @@ class AsyncQuestionsResource:
 
     async def cancel(
         self,
-        workspace_id: str,
         question_id: str,
         *,
+        workspace_id: Optional[str] = None,
         idempotency_key: Optional[str] = None,
     ) -> Question:
+        ws = await self._transport.resolve_workspace_id(workspace_id)
         idem = idempotency_key or str(uuid.uuid4())
         await self._transport.request(
             "POST",
-            f"/api/v1/workspaces/{workspace_id}/questions/{question_id}/cancel",
+            f"/api/v1/workspaces/{ws}/questions/{question_id}/cancel",
             json_body={},
             idempotency_key=idem,
         )
-        return await self.get(workspace_id, question_id)
+        return await self.get(question_id, workspace_id=ws)
 
 
 __all__ = [

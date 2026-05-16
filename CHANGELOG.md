@@ -6,6 +6,22 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-05-17
+
+### Changed (breaking)
+- `client.agents.invoke(workspace_id, agent, ...)` → `client.agents.invoke(agent, ...)`.
+  `workspace_id` is now a keyword-only argument that defaults to the
+  session's only workspace (or raises a helpful error if the session
+  has multiple). Same change applied to `client.questions.ask`,
+  `ask_async`, `wait_for_answer`, `list`, `get`, `answer`, `cancel`.
+  Migration: pass workspace_id as a keyword when the session has
+  multiple workspaces; otherwise just drop the positional argument.
+
+### Added
+- `Transport.resolve_workspace_id(explicit)` — lazy-fetches the
+  session's workspaceIds via `/api/v1/describe` once per transport
+  lifetime and caches them. Powers the auto-resolution above.
+
 ## [0.1.0] — 2026-05-17
 
 ### Added
